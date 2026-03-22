@@ -4,7 +4,9 @@ from typing import Any, Dict, Iterable, List, Tuple
 from PIL import Image
 from vagen.evaluate.adapters.base_adapter import ModelAdapter
 from vagen.evaluate.utils.mm_utils import pil_to_dataurl_png, compile_text_images_for_order
+from vagen.evaluate.registry import register_adapter
 
+@register_adapter("openai", "azure")
 class OpenAIAdapter(ModelAdapter):
     """
     OpenAI-compatible multimodal adapter:

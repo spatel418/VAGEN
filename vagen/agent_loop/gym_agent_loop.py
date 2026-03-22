@@ -163,27 +163,39 @@ class GymAgentLoop(AgentLoopBase):
         cls.processor = processor
         cls.multi_turn_cfg = config.actor_rollout_ref.rollout.multi_turn
         
+        # Store module paths for lazy loading; environments are imported on first use
+        cls.env_registry_paths = dict(config.env_registry.items())
         cls.env_registry = {}
-
-        for k, v in config.env_registry.items():
-            module_path, class_name = v.rsplit(".", 1)
-            module = importlib.import_module(module_path)
-            cls.env_registry[k] = getattr(module, class_name)
             
         cls.apply_chat_template_kwargs = config.data.get("apply_chat_template_kwargs", {})
         cls.prompt_length = config.actor_rollout_ref.rollout.prompt_length
         cls.response_length = config.actor_rollout_ref.rollout.response_length
-        cls.system_prompt = tokenizer.apply_chat_template(
-            [{}], add_generation_prompt=False, tokenize=True, **cls.apply_chat_template_kwargs
-        )
+      
+        _placeholder = [{"role": "system", "content": "placeholder"}]
+        if processor is not None:
+            _prefix_text = processor.apply_chat_template(
+                _placeholder, add_generation_prompt=False, tokenize=False, **cls.apply_chat_template_kwargs
+            )
+            cls.system_prompt_prefix = processor(text=[_prefix_text], return_tensors="pt")["input_ids"].squeeze(0).tolist()
+        else:
+            cls.system_prompt_prefix = tokenizer.apply_chat_template(
+                _placeholder, add_generation_prompt=False, tokenize=True, return_dict=False, **cls.apply_chat_template_kwargs
+            )
 
     @rollout_trace_op
     async def run(self, sampling_params: Dict[str, Any], **kwargs) -> AgentLoopOutput:
         metrics: Dict[str, Any] = {}
         request_id = uuid4().hex
 
-        # Build env
-        env_cls = self.env_registry[kwargs["env_name"]]
+        # Build env (lazy import on first use)
+        env_name = kwargs["env_name"]
+        if env_name not in self.env_registry:
+            if env_name not in self.env_registry_paths:
+                raise KeyError(f"Unknown env: {env_name}. Available: {list(self.env_registry_paths.keys())}")
+            module_path, class_name = self.env_registry_paths[env_name].rsplit(".", 1)
+            module = importlib.import_module(module_path)
+            self.env_registry[env_name] = getattr(module, class_name)
+        env_cls = self.env_registry[env_name]
         env_config = kwargs["config"]
         seed = kwargs["seed"]
         self.env_max_turns = kwargs.get("max_turns", None)
@@ -283,29 +295,18 @@ class GymAgentLoop(AgentLoopBase):
         else:
             if agent_data.image_data:
                 raise ValueError("Environment returned images but `processor` is None.")
-            try:
-                agent_data.prompt_ids = await self.loop.run_in_executor(
-                    None,
-                    lambda: self.tokenizer.apply_chat_template(
-                        agent_data.messages,
-                        add_generation_prompt=True,
-                        tokenize=True,
-                        **self.apply_chat_template_kwargs,
-                    ),
-                )
-            except TypeError as e:
-                logger.warning(f"TypeError Warning in apply_chat_template in AgentLoop: {e}, switching to flattened text-only content.")
-                # Fallback for text-only tokenizer
-                flat_messages = [_flatten_text_only_content(msg) for msg in agent_data.messages]
-                agent_data.prompt_ids = await self.loop.run_in_executor(
-                    None,
-                    lambda: self.tokenizer.apply_chat_template(
-                        flat_messages,
-                        add_generation_prompt=True,
-                        tokenize=True,
-                        **self.apply_chat_template_kwargs,
-                    ),
-                )
+
+            flat_messages = [_flatten_text_only_content(msg) for msg in agent_data.messages]
+            agent_data.prompt_ids = await self.loop.run_in_executor(
+                None,
+                lambda: self.tokenizer.apply_chat_template(
+                    flat_messages,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=False,
+                    **self.apply_chat_template_kwargs,
+                ),
+            )
         
         if len(agent_data.prompt_ids)>self.prompt_length:
             logger.warning(f"In env:{agent_data.env_name}, initial prompt length {len(agent_data.prompt_ids)} exceeds prompt_length {self.prompt_length}")
@@ -389,11 +390,12 @@ class GymAgentLoop(AgentLoopBase):
         new_images = obs.get("multi_modal_input", {}).get("<image>", []) or []
         new_images = _normalize_images(new_images)
 
+        _placeholder = {"role": "system", "content": "placeholder"}
         if self.processor is not None:
             raw_user_suffix = await self.loop.run_in_executor(
                 None,
                 lambda: self.processor.apply_chat_template(
-                    [{},user_msg],
+                    [_placeholder, user_msg],
                     add_generation_prompt=True,
                     tokenize=False,
                     **self.apply_chat_template_kwargs,
@@ -404,27 +406,16 @@ class GymAgentLoop(AgentLoopBase):
         else:
             if new_images:
                 raise ValueError("Environment returned images but `processor` is None.")
-            try:
-                response_ids = await self.loop.run_in_executor(
-                    None,
-                    lambda: self.tokenizer.apply_chat_template(
-                        [{},user_msg], add_generation_prompt=True, tokenize=True, **self.apply_chat_template_kwargs
-                    ),
-                )
-            except TypeError as e:
-                logger.warning(f"TypeError Warning in apply_chat_template in AgentLoop: {e}, switching to flattened text-only content.")
-                # Fallback for text-only tokenizer
-                flat_user_msg = _flatten_text_only_content(user_msg) 
-                response_ids = await self.loop.run_in_executor(
-                    None,
-                    lambda: self.tokenizer.apply_chat_template(
-                        [{},flat_user_msg],
-                        add_generation_prompt=True,
-                        tokenize=True,
-                        **self.apply_chat_template_kwargs,
-                    ),
-                )
-        response_ids = response_ids[len(self.system_prompt) :]
+
+            flat_user_msg = _flatten_text_only_content(user_msg)
+            response_ids = await self.loop.run_in_executor(
+                None,
+                lambda: self.tokenizer.apply_chat_template(
+                    [_placeholder, flat_user_msg], add_generation_prompt=True,
+                    tokenize=True, return_dict=False, **self.apply_chat_template_kwargs
+                ),
+            )
+        response_ids = response_ids[len(self.system_prompt_prefix):]
         agent_data.prompt_ids += response_ids
         agent_data.response_mask += [0] * len(response_ids)
         if agent_data.response_logprobs:

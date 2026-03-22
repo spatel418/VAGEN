@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,6 +37,11 @@ class CodeQAEnvConfig:
 
     # Filtering
     subset: str = "clean_nt"  # "all", "clean", "non_truncated", "clean_nt"
+
+    # Repo-level split filtering (train/val/test)
+    # Path to split_definition.json; if set with split, only repos in that split are kept
+    split_definition_path: str = ""
+    split: str = ""  # "train", "val", "test", or "" to disable
 
     # Vision token budget for image loading
     max_vision_tokens: int = 230000
@@ -82,6 +88,18 @@ class CodeQA(GymImageEnv):
         self.samples = filter_dataset(
             full_data, self.cfg.subset, contaminated_ids, nt_sample_ids
         )
+
+        # Apply repo-level split filtering if configured
+        if self.cfg.split and self.cfg.split_definition_path:
+            with open(self.cfg.split_definition_path, "r", encoding="utf-8") as f:
+                split_def = json.load(f)
+            if self.cfg.split not in split_def:
+                raise ValueError(
+                    f"Unknown split '{self.cfg.split}'. "
+                    f"Available: {[k for k in split_def if k not in ('description', 'seed', 'token_budget')]}"
+                )
+            allowed_repos = set(split_def[self.cfg.split])
+            self.samples = [s for s in self.samples if s["repo"] in allowed_repos]
 
         if not self.samples:
             raise ValueError(

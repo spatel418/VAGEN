@@ -1,0 +1,17 @@
+envs:
+  - name: CodeQA
+    n_envs: 128
+    data_source: codeqa
+    seed: [10001, 10128, 1]
+    max_turns: 2
+    response_length_per_turn: 4096
+    config:
+      dataset_path: data/codeqa/all_repos_dataset.jsonl
+      images_dir: data/codeqa/code_images_8pt
+      contaminated_path: data/codeqa/contaminated_questions_v3.json
+      nontruncated_path: data/codeqa/nontruncated_repos.json
+      subset: clean_nt
+      split_definition_path: vagen/envs/codeqa/utils/split_definition.json
+      split: val
+      token_budget: 20000
+      correct_reward: 1.0

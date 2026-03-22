@@ -108,15 +108,16 @@ async def run_eval_parallel(
             dump_dir=dump_dir,
             dump_enabled=True,  # ignored in workflow; always dump executed episodes
             chat_config=data.get("chat_config") or {},
-        )
-        logger.info(
-            "Job start env=%s tag=%s seed=%s config=%s",
-            data.get("env_name"),
-            tag_id,
-            data.get("seed"),
-            data.get("env_config"),
+            concat_multi_turn=data.get("concat_multi_turn", True),
         )
         async with episode_gate:
+            logger.info(
+                "Job start env=%s tag=%s seed=%s config=%s",
+                data.get("env_name"),
+                tag_id,
+                data.get("seed"),
+                data.get("env_config"),
+            )
             try:
                 result = await wf.arun_episode(
                     env_cls=data["env_cls"],

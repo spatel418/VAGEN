@@ -113,7 +113,7 @@ bash examples/sokoban/train_ppo_qwen25vl3b.sh
 
 ```bash
 # Qwen/Qwen3-VL-4B-Instruct
-# pip install transformers==0.57.1
+# pip install transformers==4.57.1
 # pip install "sglang[all]==0.5.3.post3"
 cd VAGEN
 bash examples/sokoban/train_grpo_qwen3vl4b.sh
@@ -195,12 +195,21 @@ Write your training script based on:
 
 See the [Documentation](https://vagen.readthedocs.io/) for more customization options:
 
-- [Custom Filter](https://vagen.readthedocs.io/en/latest/custom-filter/) - Preprocess training data (supported by [RAGEN](https://github.com/RAGEN-AI/RAGEN))
+- [Custom Filter](https://vagen.readthedocs.io/en/latest/custom-filter/) — Trajectory filtering (e.g., Reward Variance (RV) filter in [RAGEN](https://github.com/RAGEN-AI/RAGEN))
 - [Custom Metric](https://vagen.readthedocs.io/en/latest/custom-metric/) - Add W&B logging metrics
 - [Configuration](https://vagen.readthedocs.io/en/latest/configuration/) - Training configuration reference
 
 ## Useful Configs
 refer to `vagen/configs/vagen_multiturn.yaml`
+
+### No Concat Mode
+```yaml
+# Enable no concat mode: input is system prompt + current step observation
+trainer:
+  concat_multi_turn: False
+# Currently only supported with algorithm.adv_estimator=no_concat_gae
+
+```
 
 ### Image Logging
 ```yaml
@@ -219,17 +228,23 @@ trainer:
 # export HF_TOKEN=xxx
 huggingface_hub:
   hf_save_freq: null   # upload every N steps (must be a multiple of trainer.save_freq); null = disabled
-  repo_id: null         # HuggingFace repo id, e.g. "user/my-model"
-  private: false        # whether the repo is private
+  repo_id: null        
+  private: false        
 ```
 
 ### Training Data Filtering
 ```yaml
+
 filter:
-  name: reward_variance   # filter strategy name (registered in FILTER_REGISTRY)
-  filter_kwargs: {}        # extra kwargs passed to the filter function
-  enable: false            # set to true to enable filtering
+  name: reward_variance_top_p # refer to vagen/custom_filter
+  filter_kwargs: 
+    top_p: 0.9 
+  enable: False # set to true to enable filtering, recommended for grpo trainining
 ```
+
+
+## Known Issues & Fixes
+See [docs/issues.md](docs/issues.md)
 
 ## Citation
 
